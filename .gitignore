@@ -51,3 +51,5 @@ Thumbs.db
 .venv
 utils
 __pycache__
+*.xlsx
+*.csv

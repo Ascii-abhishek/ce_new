@@ -1,11 +1,12 @@
 import logging
 import os
 import re
-from typing import Any, Dict, List, Tuple
+import shutil
+from pathlib import Path
+from typing import Any, List, Tuple
+
 import numpy as np
 import pandas as pd
-
-LOGGER = logging.getLogger(__name__)
 
 
 def safe_str_to_float(val: Any, logger: logging.Logger, context_msg: str) -> float:
@@ -22,6 +23,14 @@ def safe_str_to_float(val: Any, logger: logging.Logger, context_msg: str) -> flo
         return np.nan
 
 
+def recreate_base_dir(base_dir: str, logger=logging.getLogger(__name__)):
+    base_dir = Path(base_dir)
+    if base_dir.exists():
+        logger.info(f"Path {base_dir} already exists, recreating...")
+        shutil.rmtree(base_dir)
+        Path(base_dir).mkdir(parents=True, exist_ok=True)
+
+
 def check_required_columns(
     df: pd.DataFrame,
     logger: logging.Logger,
@@ -33,19 +42,20 @@ def check_required_columns(
     """
     columns_to_initialize = [
         "data_type",
+        "key_value",
         "polarity1",
         "value1",
         "unit1",
         "polarity2",
         "value2",
         "unit2",
-        "key_value",
         "display_value",
         "mod_reason",
     ]
     final_order = list(required_context_cols) + columns_to_initialize
 
     if df.empty:
+        logger.error("Dataframe is Empty")
         return df
 
     missing_context = [col for col in required_context_cols if col not in df.columns]
@@ -62,16 +72,19 @@ def check_required_columns(
     except KeyError as e:
         raise ValueError(f"Error ordering columns in check_required_columns: {e}")
 
+    logger.info(f"Final columns list after cleanup: {df_final.columns}")
     return df_final
 
 
 def lowercase_columns_and_values(
     df: pd.DataFrame,
     value_columns: List[str] | None = None,
+    logger=logging.getLogger(__name__)
 ) -> pd.DataFrame:
     if value_columns is None:
         value_columns = ["l3_name", "attribute_name"]
 
+    logger.info("Lower case and snake case column names...")
     df_processed = df.copy()
 
     def to_snake_case(column_name: str) -> str:
@@ -87,7 +100,10 @@ def lowercase_columns_and_values(
     return df_processed
 
 
-def process_rp(df: pd.DataFrame, remove: bool = False) -> pd.DataFrame:
+def process_rp(df: pd.DataFrame, remove: bool = False, logger=logging.getLogger(__name__)) -> pd.DataFrame:
+
+    logger.info(f"{"Removing" if remove else "Prepending"} rp_ in values...")
+
     columns_to_process = ["attribute_value", "value1", "display_value", "value2"]
     present_columns = [c for c in columns_to_process if c in df.columns]
 
@@ -104,8 +120,9 @@ def process_rp(df: pd.DataFrame, remove: bool = False) -> pd.DataFrame:
     return df
 
 
-def ce_start_cleanup(df: pd.DataFrame) -> pd.DataFrame:
-    df = check_required_columns(df, LOGGER)
+def ce_start_cleanup(df: pd.DataFrame, base_dir, logger: logging.Logger = logging.getLogger(__name__)) -> pd.DataFrame:
+    recreate_base_dir(base_dir)
+    df = check_required_columns(df, logger)
     df = lowercase_columns_and_values(df)
     df = process_rp(df, remove=True)
     return df
@@ -117,7 +134,7 @@ def get_compiled_regex(pattern_name: str) -> re.Pattern:
     Add new patterns to the `patterns` dict as needed.
     """
     patterns = {
-        "numeric_with_optional_unit": r"^([+-]?)\s*(?:(?:(\d+)\s+(\d+)/(\d+))|(?:()(\d+)/(\d+))|(?:(\d*(?:\d+,\d+)?\.?\d+(?!\.))()()))(?:\s*([A-Za-z\"']+(?:\s+[A-Za-z\"']+)?))?$",
+        "numeric_with_optional_unit": r"^([+-]?)\s*(?:(?:(\d+)\s+(\d+)/(\d+))|(?:()(\d+)/(\d+))|(?:(\d*(?:\d+,\d+)?\.?\d+(?!\.))()()))(?:\s*([A-Za-z\"\°\']+(?:\s+[A-Za-z\"\']+)?))?$",
     }
 
     raw_pattern = patterns.get(pattern_name)
@@ -170,86 +187,6 @@ def standardize_unit(
 
     logger.info(f"Unit standardization complete: {len(valid_df)} valid, {len(mod_df)} invalid.")
     return valid_df, mod_df
-
-
-def cleanup_range(
-    data_df: pd.DataFrame,
-    unit_df: pd.DataFrame,
-    logger: logging.Logger = logging.getLogger(__name__),
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    For rows with data_type == "range1", enforce:
-      1) if (polarity1 == "+" and polarity2 == "-") → swap polarities & values.
-      2) if polarity conditions (both null, or polarity1 null and polarity2 '+', or polarity1 == polarity2), ensure value1 <= value2 → swap values if needed.
-      3) fill missing unit from the other side.
-      4) call standardize_unit on unit1, then on unit2; collect any failures into mod.
-      5) finally, any rows where unit1 and unit2 still mismatch → move to mod.
-    Returns: (passed_df, mod_df) where mod_df has a "reason" column.
-    """
-    if not (data_df["data_type"] == "range1").all():
-        raise ValueError("All rows must have data_type == 'range1'")
-
-    df_work = data_df.copy().reset_index(drop=True)
-    for col in ("polarity1", "polarity2", "unit1", "unit2"):
-        df_work[col] = df_work[col].fillna("").astype(str).str.strip().replace({"": pd.NA})
-
-    mod_rows = []
-    mask_swap_polarity = (df_work["polarity1"] == "+") & (df_work["polarity2"] == "-")
-    if mask_swap_polarity.any():
-        rows = df_work.loc[mask_swap_polarity].index
-        df_work.loc[rows, ["polarity1", "polarity2"]] = df_work.loc[rows, ["polarity2", "polarity1"]].values
-        df_work.loc[rows, ["value1", "value2"]] = df_work.loc[rows, ["value2", "value1"]].values
-
-    mask_order = (
-        (df_work["polarity1"].isna() & df_work["polarity2"].isna())
-        | (df_work["polarity1"].isna() & (df_work["polarity2"] == "+"))
-        | (df_work["polarity1"] == df_work["polarity2"])
-    )
-    if mask_order.any():
-        sub = df_work.loc[mask_order]
-        vals1 = sub["value1"].apply(safe_str_to_float, logger, f"Custom ")
-        vals2 = sub["value2"].apply(safe_str_to_float, logger, f"Custom ")
-        swap_idx = sub.index[vals1 > vals2]
-        if len(swap_idx):
-            df_work.loc[swap_idx, ["value1", "value2"]] = df_work.loc[swap_idx, ["value2", "value1"]].values
-
-    mask_unit2_missing = df_work["unit1"].notna() & df_work["unit2"].isna()
-    if mask_unit2_missing.any():
-        df_work.loc[mask_unit2_missing, "unit2"] = df_work.loc[mask_unit2_missing, "unit1"]
-    mask_unit1_missing = df_work["unit2"].notna() & df_work["unit1"].isna()
-    if mask_unit1_missing.any():
-        df_work.loc[mask_unit1_missing, "unit1"] = df_work.loc[mask_unit1_missing, "unit2"]
-
-    valid1, mod1 = standardize_unit(df_work, unit_df, unit_column="unit1", logger=logger)
-    if not mod1.empty:
-        temp = mod1.copy()
-        temp["reason"] = "invalid unit1"
-        mod_rows.append(temp)
-
-    valid2, mod2 = standardize_unit(valid1, unit_df, unit_column="unit2", logger=logger)
-    if not mod2.empty:
-        temp = mod2.copy()
-        temp["reason"] = "invalid unit2"
-        mod_rows.append(temp)
-
-    mask_mismatch = (
-        valid2["unit1"].notna()
-        & valid2["unit2"].notna()
-        & (valid2["unit1"].str.lower() != valid2["unit2"].str.lower())
-    )
-    if mask_mismatch.any():
-        temp = valid2.loc[mask_mismatch].copy()
-        temp["reason"] = "unit1 and unit2 are different after standardization"
-        mod_rows.append(temp)
-        valid2 = valid2.loc[~mask_mismatch].reset_index(drop=True)
-
-    passed_df = valid2.reset_index(drop=True)
-    if mod_rows:
-        mod_df = pd.concat(mod_rows, ignore_index=True)
-    else:
-        mod_df = pd.DataFrame(columns=list(data_df.columns) + ["reason"])
-
-    return passed_df, mod_df
 
 
 def save_dfs(func_name: str, passed_df: pd.DataFrame, mod_df: pd.DataFrame, base_dir: str = ".") -> None:
