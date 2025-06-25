@@ -53,3 +53,4 @@ utils
 __pycache__
 *.xlsx
 *.csv
+*.log

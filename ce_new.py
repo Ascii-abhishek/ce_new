@@ -13,212 +13,132 @@ from utils.pandas_read_data_utils import ensure_pd_df
 
 
 def _calculate_mixed_fraction_value(
-    whole_str: str,
-    num_str: str,
-    den_str: str,
-    logger: logging.Logger,
-    context: str,
+    whole_str: str, num_str: str, den_str: str, logger: logging.Logger, context: str
 ) -> Tuple[float, str]:
-    """
-    Calculates the absolute value of a mixed fraction (e.g., "1 1/2").
-    Returns (value, error_message). If there's an error, value is np.nan.
-    """
+    """Calculates the absolute value of a mixed fraction, returning value and error."""
     whole = safe_str_to_float(whole_str, logger, f"whole part in {context}")
-    numerator = safe_str_to_float(num_str, logger, f"numerator in {context}")
-    denominator = safe_str_to_float(den_str, logger, f"denominator in {context}")
+    num = safe_str_to_float(num_str, logger, f"numerator in {context}")
+    den = safe_str_to_float(den_str, logger, f"denominator in {context}")
 
-    if np.isnan(whole) or np.isnan(numerator) or np.isnan(denominator):
-        return np.nan, "Invalid number in mixed fraction components"
-    if denominator == 0.0:
+    if any(np.isnan([whole, num, den])):
+        return np.nan, "Invalid number in mixed fraction"
+    if den == 0.0:
         return np.nan, "Division by zero in mixed fraction"
-    total = abs(whole) + abs(numerator) / abs(denominator)
-    return total, ""
+    return abs(whole) + abs(num) / abs(den), ""
 
 
 def _calculate_simple_fraction_value(
-    num_str: str,
-    den_str: str,
-    logger: logging.Logger,
-    context: str,
+    num_str: str, den_str: str, logger: logging.Logger, context: str
 ) -> Tuple[float, str]:
-    """
-    Calculates the absolute value of a simple fraction (e.g., "3/4").
-    Returns (value, error_message). If there's an error, value is np.nan.
-    """
-    numerator = safe_str_to_float(num_str, logger, f"numerator in {context}")
-    denominator = safe_str_to_float(den_str, logger, f"denominator in {context}")
+    """Calculates the absolute value of a simple fraction, returning value and error."""
+    num = safe_str_to_float(num_str, logger, f"numerator in {context}")
+    den = safe_str_to_float(den_str, logger, f"denominator in {context}")
 
-    if np.isnan(numerator) or np.isnan(denominator):
-        return np.nan, "Invalid number in simple fraction components"
-    if denominator == 0.0:
+    if any(np.isnan([num, den])):
+        return np.nan, "Invalid number in simple fraction"
+    if den == 0.0:
         return np.nan, "Division by zero in simple fraction"
-    total = abs(numerator) / abs(denominator)
-    return total, ""
+    return abs(num) / abs(den), ""
 
 
 def _convert_decimal_to_float(
-    val_str: str,
-    logger: logging.Logger,
-    context: str,
+    val_str: str, logger: logging.Logger, context: str
 ) -> Tuple[float, str]:
-    """
-    Converts a decimal or integer string (possibly containing commas) to absolute float.
-    Returns (value, error_message). If there's an error, value is np.nan.
-    """
+    """Converts a decimal string to an absolute float, returning value and error."""
     if pd.isna(val_str) or not isinstance(val_str, str) or not val_str.strip():
-        return np.nan, "Empty or invalid decimal/integer string"
+        return np.nan, "Empty or invalid decimal string"
 
     cleaned = val_str.replace(",", "").strip()
-    if not cleaned:
-        return np.nan, "Empty string after removing commas"
-    if cleaned.count(".") > 1:
-        return np.nan, "Invalid decimal format: multiple decimal points"
+    if not cleaned or cleaned.count(".") > 1:
+        return np.nan, "Invalid decimal format"
 
-    # Remove leading sign, but keep track of it if needed
-    if cleaned[0] in ["+", "-"]:
-        cleaned = cleaned[1:].strip()
-
-    if not cleaned:
-        return np.nan, "Empty string after stripping sign/commas"
-
-    value = safe_str_to_float(cleaned, logger, f"value part '{cleaned}' in {context}")
+    value = safe_str_to_float(cleaned.lstrip("+-"), logger, context)
     if np.isnan(value):
-        return np.nan, "Invalid character(s) in decimal/integer string"
+        return np.nan, "Invalid characters in decimal string"
     return abs(value), ""
 
 
 def _process_row_for_numerical_unit(
-    row: pd.Series,
-    regex_cols_map: Dict[str, str],
-    logger: logging.Logger,
+    row: pd.Series, regex_cols_map: Dict[str, str], logger: logging.Logger
 ) -> Tuple[float, str]:
-    """
-    Given a row with extracted regex groups, compute the numeric value (absolute) and
-    return (value, error_reason). If no pattern matches, returns (np.nan, reason).
-    """
+    """Processes a row with regex captures to compute a numeric value."""
     context = f"attribute_value '{row.get('attribute_value', '')}'"
-    val = np.nan
-    reason = ""
-
-    # Check for mixed fraction first
-    if pd.notna(row[regex_cols_map["mixed_whole"]]):
-        val, reason = _calculate_mixed_fraction_value(
+    # Mixed fraction
+    if pd.notna(row.get(regex_cols_map["mixed_whole"])):
+        return _calculate_mixed_fraction_value(
             row[regex_cols_map["mixed_whole"]],
             row[regex_cols_map["mixed_num"]],
             row[regex_cols_map["mixed_den"]],
             logger,
-            context + " (mixed fraction)",
+            context,
         )
-    # Then check for simple fraction
-    elif pd.notna(row[regex_cols_map["simple_num"]]):
-        val, reason = _calculate_simple_fraction_value(
+    # Simple fraction
+    if pd.notna(row.get(regex_cols_map["simple_num"])):
+        return _calculate_simple_fraction_value(
             row[regex_cols_map["simple_num"]],
             row[regex_cols_map["simple_den"]],
             logger,
-            context + " (simple fraction)",
+            context,
         )
-    # Then check for decimal/integer
-    elif pd.notna(row[regex_cols_map["decimal"]]):
-        val, reason = _convert_decimal_to_float(
-            row[regex_cols_map["decimal"]],
-            logger,
-            context + " (decimal/integer)",
+    # Decimal/integer
+    if pd.notna(row.get(regex_cols_map["decimal"])):
+        return _convert_decimal_to_float(
+            row[regex_cols_map["decimal"]], logger, context
         )
-    else:
-        reason = "No recognizable numeric format"
-    return val, reason
+    return np.nan, "No recognizable numeric format"
 
 
 def _build_sep_pattern(separators: List[str]) -> str:
-    """Return a non‑capturing group pattern like ``(?:to|-)`` with optional
-    surrounding whitespace.  All *separators* are regex‑escaped and trimmed so
-    callers can pass plain strings such as ``["to", "-"]``.
-    """
-    escaped = [re.escape(s.strip()) for s in separators]
-    alternation = "|".join(sorted(escaped, key=len, reverse=True))  # longer first
-    return rf"\s*(?:{alternation})\s*"  # include surrounding whitespace flexibly
+    """Builds a regex pattern for a list of separators."""
+    escaped = sorted([re.escape(s.strip()) for s in separators], key=len, reverse=True)
+    return rf"\s*(?:{'|'.join(escaped)})\s*"
 
 
 def _cleanup_range(
-    data_df: pd.DataFrame,
-    unit_df: pd.DataFrame,
-    logger: logging.Logger = logging.getLogger(__name__),
+    data_df: pd.DataFrame, logger: logging.Logger
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
-    For rows with data_type == "range1", enforce:
-      1) if (polarity1 == "+" and polarity2 == "-") → swap polarities & values.
-      2) if polarity conditions (both null, or polarity1 null and polarity2 '+', or polarity1 == polarity2), ensure value1 <= value2 → swap values if needed.
-      3) fill missing unit from the other side.
-      4) call standardize_unit on unit1, then on unit2; collect any failures into mod.
-      5) finally, any rows where unit1 and unit2 still mismatch → move to mod.
-    Returns: (passed_df, mod_df) where mod_df has a "reason" column.
+    Validates the structure of range data. Swaps values to ensure order
+    and syncs unit fields. Does NOT standardize units.
     """
-    if not (data_df["data_type"] == "range1").all():
-        raise ValueError("All rows must have data_type == 'range1'")
+    if data_df.empty:
+        return data_df, data_df.copy()
 
-    df_work = data_df.copy().reset_index(drop=True)
-    for col in ("polarity1", "polarity2", "unit1", "unit2"):
-        df_work[col] = df_work[col].fillna("").astype(str).str.strip().replace({"": pd.NA})
+    df_work = data_df.copy()
 
-    mod_rows = []
+    # Logic to swap values/polarities as before
     mask_swap_polarity = (df_work["polarity1"] == "+") & (df_work["polarity2"] == "-")
     if mask_swap_polarity.any():
         rows = df_work.loc[mask_swap_polarity].index
-        df_work.loc[rows, ["polarity1", "polarity2"]] = df_work.loc[rows, ["polarity2", "polarity1"]].values
-        df_work.loc[rows, ["value1", "value2"]] = df_work.loc[rows, ["value2", "value1"]].values
+        df_work.loc[rows, ["polarity1", "polarity2"]] = df_work.loc[
+            rows, ["polarity2", "polarity1"]
+        ].values
+        df_work.loc[rows, ["value1", "value2"]] = df_work.loc[
+            rows, ["value2", "value1"]
+        ].values
 
-    mask_order = (
-        (df_work["polarity1"].isna() & df_work["polarity2"].isna())
-        | (df_work["polarity1"].isna() & (df_work["polarity2"] == "+"))
-        | (df_work["polarity1"] == df_work["polarity2"])
+    # Sync units: fill missing unit from the other side
+    df_work["unit1"] = df_work["unit1"].fillna(df_work["unit2"])
+    df_work["unit2"] = df_work["unit2"].fillna(df_work["unit1"])
+
+    # After syncing, check if units match. If not, they are modified.
+    mismatch_mask = (
+        df_work["unit1"].notna()
+        & df_work["unit2"].notna()
+        & (
+            df_work["unit1"].astype(str).str.lower()
+            != df_work["unit2"].astype(str).str.lower()
+        )
     )
-    if mask_order.any():
-        sub = df_work.loc[mask_order]
-        vals1 = sub["value1"].apply(safe_str_to_float, args=(logger, "value1 in cleanup_range"),
-                                    )
-        vals2 = sub["value2"].apply(safe_str_to_float, args=(logger, "value2 in cleanup_range"),
-                                    )
-        swap_idx = sub.index[vals1 > vals2]
-        if len(swap_idx):
-            df_work.loc[swap_idx, ["value1", "value2"]] = df_work.loc[swap_idx, ["value2", "value1"]].values
 
-    mask_unit2_missing = df_work["unit1"].notna() & df_work["unit2"].isna()
-    if mask_unit2_missing.any():
-        df_work.loc[mask_unit2_missing, "unit2"] = df_work.loc[mask_unit2_missing, "unit1"]
-    mask_unit1_missing = df_work["unit2"].notna() & df_work["unit1"].isna()
-    if mask_unit1_missing.any():
-        df_work.loc[mask_unit1_missing, "unit1"] = df_work.loc[mask_unit1_missing, "unit2"]
+    mod_df = df_work[mismatch_mask].copy()
+    if not mod_df.empty:
+        mod_df["mod_reason"] = "Unit mismatch in range"
 
-    valid1, mod1 = standardize_unit(df_work, unit_df, unit_column="unit1", logger=logger)
-    if not mod1.empty:
-        temp = mod1.copy()
-        temp["reason"] = "invalid unit1"
-        mod_rows.append(temp)
+    passed_df = df_work[~mismatch_mask].copy()
 
-    valid2, mod2 = standardize_unit(valid1, unit_df, unit_column="unit2", logger=logger)
-    if not mod2.empty:
-        temp = mod2.copy()
-        temp["reason"] = "invalid unit2"
-        mod_rows.append(temp)
+    return passed_df.reset_index(drop=True), mod_df.reset_index(drop=True)
 
-    mask_mismatch = (
-        valid2["unit1"].notna()
-        & valid2["unit2"].notna()
-        & (valid2["unit1"].str.lower() != valid2["unit2"].str.lower())
-    )
-    if mask_mismatch.any():
-        temp = valid2.loc[mask_mismatch].copy()
-        temp["reason"] = "unit1 and unit2 are different after standardization"
-        mod_rows.append(temp)
-        valid2 = valid2.loc[~mask_mismatch].reset_index(drop=True)
-
-    passed_df = valid2.reset_index(drop=True)
-    if mod_rows:
-        mod_df = pd.concat(mod_rows, ignore_index=True)
-    else:
-        mod_df = pd.DataFrame(columns=list(data_df.columns) + ["reason"])
-
-    return passed_df, mod_df
 
 #######################################################################################################
 #######################################################################################################
@@ -230,107 +150,76 @@ def clean_varchar_categorical(
     logger: logging.Logger = logging.getLogger(__name__),
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
-    Cleans attribute values to classify them as 'varchar', 'categorical', or 'categorical2'.
-
-    This function processes string values that do not contain any numbers.
-    The logic is as follows:
-    1.  If a value contains a comma:
-        - It splits the value by the comma.
-        - If any resulting part has more than 3 words, it's classified as 'varchar'.
-        - Otherwise, it's classified as 'categorical2'.
-    2.  If a value does not contain a comma:
-        - If it has more than 3 words, it's classified as 'varchar'.
-        - Otherwise (3 or fewer words), it's classified as 'categorical'.
-
-    Args:
-        df: The input DataFrame to process.
-        value_column: The name of the column containing the values to clean.
-        logger: The logger instance for logging messages.
+    Cleans and classifies string values as 'varchar', 'categorical', or 'categorical2'.
 
     Returns:
         A tuple of three DataFrames: (passed_df, mod_df, remaining_df).
         - passed_df: Rows that were successfully classified.
-        - mod_df: Always empty for this cleaner, returned for pipeline consistency.
-        - remaining_df: Rows that did not meet the criteria for this cleaner (e.g., contained numbers).
+        - mod_df: Always an empty DataFrame for this cleaner.
+        - remaining_df: Rows that did not meet the criteria (e.g., are purely numeric).
     """
-    logger.info(f"Starting clean_varchar_categorical on {len(df)} rows.")
     if df.empty:
-        # Define expected columns for empty DataFrames
-        passed_cols = list(df.columns) + ["value1", "data_type"]
-        mod_cols = list(df.columns) + ["mod_reason"]
-        remaining_cols = list(df.columns)
-        return (
-            pd.DataFrame(columns=passed_cols),
-            pd.DataFrame(columns=mod_cols),
-            pd.DataFrame(columns=remaining_cols),
-        )
+        return df, df.copy(), df.copy()
 
     work_df = df.copy()
-
     stripped = work_df[value_column].astype(str).str.strip()
+
+    # Identify candidates: strings that contain no digits or start with a letter
     is_candidate_mask = (
-        work_df[value_column].notna()                 # not null
-        & stripped.ne("")                             # not an empty string
-        & (                                           # ── numeric rule ──
-            stripped.str.contains(r"^\D*$", regex=True)          # A) no digits at all
-            | stripped.str.match(r"^[A-Za-z].*\d", na=False)     # B) has digits but 1st char is a letter
+        work_df[value_column].notna()
+        & stripped.ne("")
+        & (
+            stripped.str.contains(r"^\D*$", regex=True)
+            | stripped.str.match(r"^[A-Za-z].*\d", na=False)
         )
     )
 
     candidate_df = work_df[is_candidate_mask].copy()
     remaining_df = work_df[~is_candidate_mask].copy()
 
+    logger.info(f"{len(candidate_df)} rows matched regex; {len(remaining_df)} did not.")
+
     if candidate_df.empty:
-        logger.info("No candidate rows for varchar/categorical cleaning.")
-        passed_cols = list(df.columns) + ["value1", "data_type"]
-        mod_cols = list(df.columns) + ["mod_reason"]
-        return (
-            pd.DataFrame(columns=passed_cols),
-            pd.DataFrame(columns=mod_cols),
-            df,
-        )
+        return candidate_df, candidate_df.copy(), remaining_df
 
     candidate_df["value1"] = candidate_df[value_column]
     candidate_df["data_type"] = pd.NA
 
-    # Condition 1: Value contains a comma
+    # Logic for classification based on commas and word count
     comma_mask = candidate_df[value_column].astype(str).str.contains(",", na=False)
 
-    # For rows with commas, split by comma and check word counts of each part
+    # With comma: >3 words in any part -> varchar, else -> categorical2
     if comma_mask.any():
         splits = candidate_df.loc[comma_mask, value_column].astype(str).str.split(",")
-        # Check if any split part has more than 3 words
-        max_words_in_split = splits.apply(lambda parts: max(len(p.strip().split()) for p in parts) if parts else 0)
+        max_words = splits.apply(
+            lambda parts: max(len(p.strip().split()) for p in parts) if parts else 0
+        )
+        candidate_df.loc[comma_mask, "data_type"] = np.where(
+            max_words > 3, "varchar", "categorical2"
+        )
 
-        # If any part > 3 words -> varchar
-        is_varchar_mask = max_words_in_split > 3
-        candidate_df.loc[comma_mask & is_varchar_mask, "data_type"] = "varchar"
-        candidate_df.loc[comma_mask & ~is_varchar_mask, "data_type"] = "categorical2"
-
-    # Condition 2: Value does not contain a comma
+    # No comma: >3 words -> varchar, else -> categorical
     no_comma_mask = ~comma_mask
     if no_comma_mask.any():
-        word_counts = candidate_df.loc[no_comma_mask, value_column].astype(str).str.split().str.len()
+        word_counts = (
+            candidate_df.loc[no_comma_mask, value_column]
+            .astype(str)
+            .str.split()
+            .str.len()
+        )
+        candidate_df.loc[no_comma_mask, "data_type"] = np.where(
+            word_counts > 3, "varchar", "categorical"
+        )
 
-        # If > 3 words -> varchar
-        is_varchar_mask = word_counts > 3
-        candidate_df.loc[no_comma_mask & is_varchar_mask, "data_type"] = "varchar"
+    # For this function, mod_df is always empty. Return an empty frame for consistency.
+    mod_df = pd.DataFrame(columns=candidate_df.columns)
 
-        # If <= 3 words -> categorical
-        candidate_df.loc[no_comma_mask & ~is_varchar_mask, "data_type"] = "categorical"
-
-    passed_df = candidate_df
-
-    logger.info(
-        f"Finished clean_varchar_categorical: {len(passed_df)} passed, "
-        f"{len(remaining_df)} remaining."
-    )
-
-    return passed_df, remaining_df
+    return candidate_df, mod_df, remaining_df
 
 
 def clean_numerical_unit(
     df: pd.DataFrame,
+    unit_df: pd.DataFrame,
     value_column: str = "attribute_value",
     logger: logging.Logger = logging.getLogger(__name__),
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -342,7 +231,6 @@ def clean_numerical_unit(
     - modified_for_error_df: rows where numeric extraction matched but had conversion errors
     - remaining_df: rows where regex did not match at all
     """
-    logger.info(f"Starting clean_numerical_unit on {len(df)} rows.")
     if value_column not in df.columns:
         raise KeyError(f"Input DataFrame must contain '{value_column}' column.")
 
@@ -367,17 +255,27 @@ def clean_numerical_unit(
     combined = pd.concat([df_working, extracted], axis=1)
 
     # Rows where none of the numeric groups matched
-    no_match_mask = combined["mixed_whole"].isna() & combined["simple_num"].isna() & combined["decimal"].isna()
+    no_match_mask = (
+        combined["mixed_whole"].isna()
+        & combined["simple_num"].isna()
+        & combined["decimal"].isna()
+    )
     remaining_df = combined.loc[no_match_mask, [*df_working.columns]].copy()
     passed_intermediate = combined.loc[~no_match_mask].copy()
 
-    logger.info(f"{len(passed_intermediate)} rows matched regex; {len(remaining_df)} did not.")
+    logger.info(
+        f"{len(passed_intermediate)} rows matched regex; {len(remaining_df)} did not."
+    )
 
     if not passed_intermediate.empty:
         # Determine polarity from sign
-        passed_intermediate["polarity1"] = passed_intermediate["sign"].replace({"": pd.NA, np.nan: pd.NA})
+        passed_intermediate["polarity1"] = passed_intermediate["sign"].replace(
+            {"": pd.NA, np.nan: pd.NA}
+        )
         # Assign unit directly from regex group
-        passed_intermediate["unit1"] = passed_intermediate["unit"].where(passed_intermediate["unit"].notna(), pd.NA)
+        passed_intermediate["unit1"] = passed_intermediate["unit"].where(
+            passed_intermediate["unit"].notna(), pd.NA
+        )
 
         # Map for extraction
         regex_cols_map = {
@@ -391,41 +289,65 @@ def clean_numerical_unit(
 
         # Compute numeric value and error reason
         values_reasons = passed_intermediate.apply(
-            lambda row: _process_row_for_numerical_unit(row, regex_cols_map, logger), axis=1
+            lambda row: _process_row_for_numerical_unit(row, regex_cols_map, logger),
+            axis=1,
         )
         passed_intermediate[["value1", "mod_reason"]] = pd.DataFrame(
             values_reasons.tolist(), index=passed_intermediate.index
         )
 
         # Coerce value1 to numeric
-        passed_intermediate["value1"] = pd.to_numeric(passed_intermediate["value1"], errors="coerce")
+        passed_intermediate["value1"] = pd.to_numeric(
+            passed_intermediate["value1"], errors="coerce"
+        )
 
         # Determine data_type based on presence of unit
-        has_unit = passed_intermediate["unit1"].notna() & (passed_intermediate["unit1"] != "")
-        passed_intermediate["data_type"] = np.where(has_unit, "numerical_with_unit", "numerical_without_unit")
+        has_unit = passed_intermediate["unit1"].notna() & (
+            passed_intermediate["unit1"] != ""
+        )
+        passed_intermediate["data_type"] = np.where(
+            has_unit, "numerical_with_unit", "numerical_without_unit"
+        )
 
         # Split into passed (no errors) and modified_for_error (errors present)
-        error_mask = passed_intermediate["mod_reason"].notna() & (passed_intermediate["mod_reason"] != "")
-        mod_df = passed_intermediate.loc[error_mask].copy()
-        passed_df = passed_intermediate.loc[~error_mask].copy()
+        error_mask = passed_intermediate["mod_reason"].notna() & (
+            passed_intermediate["mod_reason"] != ""
+        )
+        initial_mod_df = passed_intermediate[error_mask].copy()
+        initial_passed_df = passed_intermediate[~error_mask].copy()
+
+        # Standardize units on the successfully parsed data
+        if not initial_passed_df.empty:
+            passed_after_units, unit_mod_df = standardize_unit(
+                initial_passed_df, unit_df, "unit1", logger
+            )
+            if not unit_mod_df.empty:
+                unit_mod_df["mod_reason"] = "Invalid unit"
+                all_mods = [df for df in [initial_mod_df, unit_mod_df] if not df.empty]
+                final_mod_df = (
+                    pd.concat(all_mods, ignore_index=True)
+                    if all_mods
+                    else pd.DataFrame()
+                )
+            else:
+                final_mod_df = initial_mod_df
+            final_passed_df = passed_after_units
+        else:  # If all initial rows had errors
+            final_passed_df = initial_passed_df
+            final_mod_df = initial_mod_df
     else:
-        passed_df = pd.DataFrame(columns=combined.columns)
-        mod_df = pd.DataFrame(columns=combined.columns)
+        final_passed_df, final_mod_df = pd.DataFrame(), pd.DataFrame()
 
     # Reorder and drop helper columns
-    passed_df = check_required_columns(passed_df, logger)
-    mod_df = check_required_columns(mod_df, logger)
-    remaining_df = check_required_columns(remaining_df, logger)
+    passed_df = check_required_columns(final_passed_df, logger=logger)
+    mod_df = check_required_columns(final_mod_df, logger=logger)
+    remaining_df = check_required_columns(remaining_df, logger=logger)
 
-    logger.info(
-        f"Finished clean_numerical_unit: {len(passed_df)} passed, "
-        f"{len(mod_df)} had errors, {len(remaining_df)} did not match."
-    )
     return passed_df, mod_df, remaining_df
 
 
 def clean_thread(
-    df: pd.DataFrame,
+    df: pd.DataFrame, logger: logging.Logger = logging.getLogger(__name__)
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     if df.empty:
         cols = list(df.columns)
@@ -437,16 +359,17 @@ def clean_thread(
 
     mask = df["attribute_name"].astype(str).str.contains("thread", case=False, na=False)
     mod_df = df.loc[mask].copy()
+    remaining_df = df.loc[~mask].copy()
+    logger.info(f"{len(mod_df)} rows matched regex; {len(remaining_df)} did not.")
     if not mod_df.empty:
         mod_df["mod_reason"] = "spec with thread"
-    remaining_df = df.loc[~mask].copy()
-
     passed_df = pd.DataFrame(columns=df.columns)
     return passed_df, mod_df, remaining_df
 
 
 def clean_dimension_values(
     df: pd.DataFrame,
+    unit_df: pd.DataFrame,
     *,
     value_column: str = "attribute_value",
     separators: List[str] | None = None,
@@ -484,10 +407,17 @@ def clean_dimension_values(
     dim_re = re.compile(rf"^\s*{num_re}(?:{sep_pat}{num_re}){{1,2}}\s*$", re.I | re.X)
 
     work = df.copy()
-    work["_matches_dim"] = work[value_column].astype(str).apply(lambda s: bool(dim_re.match(s.strip())))
+    work["_matches_dim"] = (
+        work[value_column].astype(str).apply(lambda s: bool(dim_re.match(s.strip())))
+    )
 
     cand_df = work[work["_matches_dim"]].copy()
-    remain_df = work[~work["_matches_dim"]].drop(columns=["_matches_dim"], errors="ignore").copy()
+    remain_df = (
+        work[~work["_matches_dim"]]
+        .drop(columns=["_matches_dim"], errors="ignore")
+        .copy()
+    )
+    logger.info(f"{len(cand_df)} rows matched regex; {len(remain_df)} did not.")
 
     if cand_df.empty:
         empty_cols = list(df.columns) + ["key_value"]
@@ -502,18 +432,21 @@ def clean_dimension_values(
     cand_df["_idx"] = cand_df.index
 
     split_re = re.compile(sep_pat, re.I)
-    cand_df["_parts"] = cand_df[value_column].astype(str).apply(lambda s: re.split(split_re, s))
+    cand_df["_parts"] = (
+        cand_df[value_column].astype(str).apply(lambda s: re.split(split_re, s))
+    )
 
     exploded = cand_df.explode("_parts").copy()
     exploded[value_column] = exploded["_parts"].str.strip()
     exploded["key_value"] = exploded["_idx"]
 
-    num_input = (
-        exploded
-        .drop(columns=["_parts", "_matches_dim", "_idx"], errors="ignore")
+    num_input = exploded.drop(
+        columns=["_parts", "_matches_dim", "_idx"], errors="ignore"
     )
 
-    pass_df, mod_df, rem_df = clean_numerical_unit(num_input, value_column=value_column, logger=logger)
+    pass_df, mod_df, rem_df = clean_numerical_unit(
+        num_input, unit_df=unit_df, value_column=value_column, logger=logger
+    )
 
     # Any rem_df rows indicate endpoints that failed numeric grammar – they
     # belong in *remain_df* so downstream logic can decide what to do.
@@ -611,12 +544,16 @@ def clean_range_with_to_and_hyphen(
     )
 
     work = df.copy()
-    work["_is_range"] = work[value_column].astype(str).apply(
-        lambda x: bool(range_regex.match(x.strip()))
+    work["_is_range"] = (
+        work[value_column]
+        .astype(str)
+        .apply(lambda x: bool(range_regex.match(x.strip())))
     )
 
     candidate_df = work[work["_is_range"]].copy()
     remaining_df = work[~work["_is_range"]].drop(columns=["_is_range"]).copy()
+
+    logger.info(f"{len(candidate_df)} rows matched regex; {len(remaining_df)} did not.")
 
     # ------------------------------------------------------------------
     # 2. Return early if nothing matched
@@ -646,8 +583,10 @@ def clean_range_with_to_and_hyphen(
 
     # Build *exactly the same* separator pattern without anchors for splitting
     split_pattern = re.compile(sep_pattern, flags=re.IGNORECASE)
-    candidate_df["_parts"] = candidate_df[value_column].astype(str).apply(
-        lambda s: re.split(split_pattern, s, maxsplit=1)
+    candidate_df["_parts"] = (
+        candidate_df[value_column]
+        .astype(str)
+        .apply(lambda s: re.split(split_pattern, s, maxsplit=1))
     )
 
     exploded = candidate_df.explode("_parts").copy()
@@ -655,20 +594,19 @@ def clean_range_with_to_and_hyphen(
     exploded["key_value"] = exploded["_orig_idx"]
 
     # Prepare input for clean_numerical_unit
-    numeric_input = (
-        exploded
-        .drop(columns=[value_column, "_is_range", "_orig_idx"], errors="ignore")
-        .rename(columns={"_parts": value_column})
-    )
+    numeric_input = exploded.drop(
+        columns=[value_column, "_is_range", "_orig_idx"], errors="ignore"
+    ).rename(columns={"_parts": value_column})
 
     numeric_pass, numeric_mod, numeric_remain = clean_numerical_unit(
-        numeric_input, value_column=value_column, logger=logger
+        numeric_input, unit_df=unit_df, value_column=value_column, logger=logger
     )
 
     # Collate modifications & remaining mismatches
-    mod_df = numeric_mod.copy()
-    if not numeric_remain.empty:
-        remaining_df = pd.concat([remaining_df, numeric_remain], ignore_index=True)
+
+    dfs_to_concat_remain = [df for df in [remaining_df, numeric_remain] if not df.empty]
+    if dfs_to_concat_remain:
+        remaining_df = pd.concat(dfs_to_concat_remain, ignore_index=True)
 
     # ------------------------------------------------------------------
     # 4. Re‑assemble cleaned endpoints & restore original attribute text
@@ -689,13 +627,32 @@ def clean_range_with_to_and_hyphen(
 
         range_records.append(combined)
 
-    range_df = pd.DataFrame(range_records)
-
     # ------------------------------------------------------------------
     # 5. Validate range semantics & unit compatibility
     # ------------------------------------------------------------------
-    range_pass, range_mod = _cleanup_range(range_df, unit_df, logger=logger)
-    mod_df = pd.concat([mod_df, range_mod], ignore_index=True)
+    range_df = pd.DataFrame(range_records)
+    all_mod_dfs = [df for df in [numeric_mod] if not df.empty]
+    if not range_df.empty:
+        range_pass, range_mod = _cleanup_range(range_df, logger=logger)
+        if not range_mod.empty:
+            all_mod_dfs.append(range_mod)
+    else:
+        range_pass = pd.DataFrame(columns=range_df.columns)
+
+    if not range_pass.empty:
+        passed_final, unit_mod = standardize_unit(range_pass, unit_df, "unit1", logger)
+        if not unit_mod.empty:
+            unit_mod["mod_reason"] = "Invalid unit in range"
+            all_mod_dfs.append(unit_mod)
+        # Sync unit2 with standardized unit1
+        if not passed_final.empty:
+            passed_final["unit2"] = passed_final["unit1"]
+    else:
+        passed_final = range_pass
+
+    mod_df = (
+        pd.concat(all_mod_dfs, ignore_index=True) if all_mod_dfs else pd.DataFrame()
+    )
 
     # ------------------------------------------------------------------
     # 6. Drop helper columns and enforce required column set
@@ -705,62 +662,98 @@ def clean_range_with_to_and_hyphen(
     mod_df = mod_df.drop(columns=helper_cols, errors="ignore")
     remaining_df = remaining_df.drop(columns=helper_cols, errors="ignore")
 
-    range_pass = check_required_columns(range_pass, logger)
-    mod_df = check_required_columns(mod_df, logger)
-    remaining_df = check_required_columns(remaining_df, logger)
+    range_pass = check_required_columns(range_pass, logger=logger)
+    mod_df = check_required_columns(mod_df, logger=logger)
+    remaining_df = check_required_columns(remaining_df, logger=logger)
 
     return range_pass, mod_df, remaining_df
+
+
+#######################################################################################################
+#######################################################################################################
 
 
 def run_cleanup_pipeline(
     raw_df: pd.DataFrame,
     unit_df: pd.DataFrame,
     base_dir: str = ".",
+    logger: logging.Logger = None,
 ) -> None:
-    """Run the full CE cleanup pipeline and materialise intermediate outputs.
-
-    The sequence is:
-      1. ce_start_cleanup
-      2. clean_numerical_unit
-      3. clean_thread
-      4. clean_dimension_values
-      5. clean_range_with_to_and_plus_minus
-
-    *passed* frames go to ``<base_dir>/passed``; *mod* frames (including the final
-    *remain*) to ``<base_dir>/mod``.
     """
+    Runs the full CE cleanup pipeline and saves intermediate outputs.
+    """
+    recreate_base_dir(base_dir=base_dir)
+    logger = setup_logger(base_dir) if logger is None else logger
 
-    # start‑of‑pipe cleanup
-    df_after_start = ce_start_cleanup(raw_df, base_dir)
-    remain = df_after_start
+    logger.info(f"▶️ Starting Cleaning Engine Pipeline on {len(raw_df)} rows.")
 
-    # 0 - varchar and categorical
-    passed, remain = clean_varchar_categorical(remain)
-    save_dfs("clean_varchar_categorical", passed_df=passed, mod_df=None, base_dir=base_dir)
+    # Initial Cleanup
+    df_cleaned = ce_start_cleanup(raw_df, logger)
+    remain = df_cleaned
+    logger.info(
+        f"Initial cleanup complete. Starting sequential cleaners on {len(remain)} rows."
+    )
 
-    # 1 – numerical units -------------------------------------------------------
-    passed, mod, remain = clean_numerical_unit(remain)
+    # --- Pipeline Steps ---
+    def log_step(name, passed, mod, remain):
+        logger.info(f"Function '{name}':")
+        logger.info(f"  - Passed: {len(passed):>6} rows")
+        logger.info(f"  - For mod: {len(mod):>5} rows")
+        logger.info(f"  - Remaining: {len(remain):>6} rows")
+        logger.info("-" * 40)
+
+    # Step 1: Varchar and Categorical
+    logger.info(f"1️⃣: clean_varchar_categorical on {len(remain)} rows...")
+    passed, mod, remain = clean_varchar_categorical(df=remain, logger=logger)
+    save_dfs("clean_varchar_categorical", passed, mod, base_dir)
+    log_step("clean_varchar_categorical", passed, mod, remain)
+
+    # Step 2: Numerical with/without Unit
+    logger.info(f"2️⃣: clean_numerical_unit on {len(remain)} rows...")
+    passed, mod, remain = clean_numerical_unit(
+        df=remain, unit_df=unit_df, logger=logger
+    )
     save_dfs("clean_numerical_unit", passed, mod, base_dir)
+    log_step("clean_numerical_unit", passed, mod, remain)
 
-    # 2 – thread spec filter ----------------------------------------------------
-    passed, mod, remain = clean_thread(remain)
+    # Step 3: Thread Spec Filter
+    logger.info(f"3️⃣: clean_thread on {len(remain)} rows...")
+    passed, mod, remain = clean_thread(df=remain, logger=logger)
     save_dfs("clean_thread", passed, mod, base_dir)
+    log_step("clean_thread", passed, mod, remain)
 
-    # 3 – dimension (X × Y) values --------------------------------------------
-    passed, mod, remain = clean_dimension_values(remain)
+    # Step 4: Dimension Values (e.g., 10 x 20)
+    logger.info(f"4️⃣: clean_dimension_values on {len(remain)} rows...")
+    passed, mod, remain = clean_dimension_values(
+        df=remain, unit_df=unit_df, logger=logger
+    )
     save_dfs("clean_dimension_values", passed, mod, base_dir)
+    log_step("clean_dimension_values", passed, mod, remain)
 
-    # # 4 – ranges ("100 to 200") ------------------------------------------------
-    passed, mod, remain = clean_range_with_to_and_hyphen(remain, unit_df)
+    # Step 5: Range Values (e.g., 100 to 200)
+    logger.info(f"5️⃣: clean_range_with_to_and_hyphen on {len(remain)} rows...")
+    passed, mod, remain = clean_range_with_to_and_hyphen(
+        df=remain, unit_df=unit_df, logger=logger
+    )
     save_dfs("clean_range_with_to_and_hyphen", passed, mod, base_dir)
+    log_step("clean_range_with_to_and_hyphen", passed, mod, remain)
 
-    # 5 – whatever is *still* left becomes final remain and is saved as mod -----
+    # Final Step: Save any remaining unprocessable rows
+    logger.info(
+        f"Pipeline finished. {len(remain)} rows could not be processed by any cleaner."
+    )
     if not remain.empty:
+        remain["mod_reason"] = "Unprocessed by any cleaner"
         remain_path = os.path.join(base_dir, "mod", "final_remain.csv")
         remain.to_csv(remain_path, index=False)
+        logger.info(f"Saved remaining rows to 'mod/final_remain.csv'.")
+
+    logger.info("✅ Cleanup pipeline completed successfully.")
 
 
-if __name__ == '__main__':
-    df = ensure_pd_df("/home/abhishek/projects/cleaning/data/sealmaster_part2_for_cleaning.xlsx")
+if __name__ == "__main__":
+    df = ensure_pd_df(
+        "/home/abhishek/projects/cleaning/data/sealmaster_part2_for_cleaning.xlsx"
+    )
     unit_df = df_from_query("select units, display from hercules_db.ce_unit_mapping")
     run_cleanup_pipeline(df, unit_df)
