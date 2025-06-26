@@ -62,25 +62,34 @@ def recreate_base_dir(base_dir: str):
     base_dir_path.mkdir(parents=True, exist_ok=True)
 
 
+# ce_helpers.py
 def check_required_columns(
     df: pd.DataFrame,
+    *,
     required_context_cols: Tuple[str, ...] = (
         "l3_name",
         "attribute_name",
         "attribute_value",
     ),
+    overwrite_init: bool = False,  # ✅ NEW
     logger: logging.Logger = logging.getLogger(__name__),
 ) -> pd.DataFrame:
     """
-    Ensures the DataFrame has all required columns, initializing missing ones.
+    Ensure the frame has the core CE schema.
 
-    This function enforces a standard column structure. If the input DataFrame
-    is empty, it logs this information and returns the empty frame with the
-    correct columns, which is an expected condition between pipeline stages.
+    Parameters
+    ----------
+    overwrite_init : bool, default False
+        • False  → **idempotent**: create any missing init columns but keep
+          whatever data is already there.
+        • True   → **fresh start**: *drop* the init columns if they exist and
+          recreate them, filled with ``pd.NA``.
     """
-    columns_to_initialize = [
+    id_cols = ("int_pid", "ext_pid")
+    init_cols = [
         "data_type",
         "key_value",
+        "child_attribute",
         "polarity1",
         "value1",
         "unit1",
@@ -90,29 +99,43 @@ def check_required_columns(
         "display_value",
         "mod_reason",
     ]
-    final_order = list(required_context_cols) + columns_to_initialize
 
+    # --- 0. Sanity checks --------------------------------------------------
     if df.empty:
-        logger.info(
-            "Input DataFrame is empty, returning an empty DataFrame with standard columns."
-        )
+        final_order = [*id_cols, *required_context_cols, *init_cols]
         return pd.DataFrame(columns=final_order)
 
-    missing_context = [col for col in required_context_cols if col not in df.columns]
-    if missing_context:
-        raise KeyError(f"Missing required context columns: {missing_context}")
+    if not any(col in df.columns for col in id_cols):
+        raise KeyError("Either 'int_pid' or 'ext_pid' column is required")
 
-    df_copy = df.copy()
-    for col in columns_to_initialize:
-        if col not in df_copy.columns:
-            df_copy[col] = pd.NA
+    missing_ctx = [c for c in required_context_cols if c not in df.columns]
+    if missing_ctx:
+        raise KeyError(f"Missing required context columns: {missing_ctx}")
 
-    try:
-        df_final = df_copy[final_order]
-    except KeyError as e:
-        raise ValueError(f"Error ordering columns in check_required_columns: {e}")
+    # --- 1. Copy & (optionally) wipe the init columns ----------------------
+    df2 = df.copy()
+    if overwrite_init:
+        df2.drop(
+            columns=init_cols,
+            inplace=True,
+            errors="ignore",
+        )
 
-    return df_final
+    # --- 2. Add any still-missing init columns -----------------------------
+    for col in init_cols:
+        if col not in df2.columns:
+            df2[col] = pd.NA
+
+    # --- 3. Stable column order -------------------------------------------
+    final_order = (
+        [c for c in id_cols if c in df2.columns]
+        + list(required_context_cols)
+        + init_cols
+    )
+    # *dict.fromkeys* removes accidental duplicates while preserving order
+    final_order = list(dict.fromkeys(final_order))
+
+    return df2.loc[:, final_order]
 
 
 def lowercase_columns_and_values(
@@ -173,19 +196,28 @@ def ce_start_cleanup(
     """Runs the initial cleanup sequence on the raw DataFrame."""
     df = lowercase_columns_and_values(df=df, logger=logger)
     df = process_rp(df=df, remove=True, logger=logger)
-    df = check_required_columns(df=df, logger=logger)
+    df = check_required_columns(df=df, overwrite_init=True, logger=logger)
     return df
 
 
 def get_compiled_regex(pattern_name: str) -> re.Pattern:
-    """Returns a compiled regex object for a given pattern name."""
+    num_opt_unit = r"""([+-]?)\s*(?:(?:(\d+)\s+(\d+)/(\d+))|
+                       (?:()(\d+)/(\d+))|
+                       (?:(\d*(?:,\d+)*\.?\d+)))()()(?:\s*
+                       ([A-Za-z"°'\.]+(?:\s+[A-Za-z"'\.]+)?))?"""
+
     patterns = {
-        "numeric_with_optional_unit": r"^([+-]?)\s*(?:(?:(\d+)\s+(\d+)/(\d+))|(?:()(\d+)/(\d+))|(?:(\d*(?:,\d+)*\.?\d+)))()()(?:\s*([A-Za-z\"\°\'\.]+(?:\s+[A-Za-z\"\'\.]+)?))?$",
+        "numeric_with_optional_unit": rf"^{num_opt_unit}$",
+        "thread_metric": rf"""(?ix) ^\s*m {num_opt_unit} \s*
+                              [x×] \s*
+                              ([0-9]+(?:\.[0-9]+)?(?:/[0-9]+)?)\s*
+                              (?:"|mm)?\s*$""",
     }
-    raw_pattern = patterns.get(pattern_name)
-    if raw_pattern is None:
-        raise KeyError(f"No regex pattern found for '{pattern_name}'")
-    return re.compile(raw_pattern, re.VERBOSE)
+
+    raw = patterns.get(pattern_name)
+    if raw is None:
+        raise KeyError(f"No regex pattern for “{pattern_name}”")
+    return re.compile(raw, re.VERBOSE | re.IGNORECASE)
 
 
 def standardize_unit(
@@ -233,7 +265,11 @@ def standardize_unit(
 
 
 def save_dfs(
-    func_name: str, passed_df: pd.DataFrame, mod_df: pd.DataFrame, base_dir: str = "."
+    func_name: str,
+    passed_df: pd.DataFrame,
+    mod_df: pd.DataFrame,
+    base_dir: str = ".",
+    logger: logging.Logger = logging.getLogger(__name__),
 ) -> None:
     """Saves passed and modified DataFrames to their respective directories."""
     os.makedirs(os.path.join(base_dir, "passed"), exist_ok=True)
@@ -241,8 +277,11 @@ def save_dfs(
 
     if passed_df is not None and not passed_df.empty:
         passed_path = os.path.join(base_dir, "passed", f"{func_name}_passed.csv")
+        passed_df = process_rp(passed_df, logger=logger)
+        passed_df.drop(columns=["mod_reason"], errors="ignore", inplace=True)
         passed_df.to_csv(passed_path, index=False)
 
     if mod_df is not None and not mod_df.empty:
         mod_path = os.path.join(base_dir, "mod", f"{func_name}_mod.csv")
+        mod_df = process_rp(mod_df, logger=logger)
         mod_df.to_csv(mod_path, index=False)
