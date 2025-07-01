@@ -1,5 +1,6 @@
 from datetime import datetime
 import logging
+import math
 import os
 import re
 import shutil
@@ -9,49 +10,7 @@ from typing import Any, List, Tuple
 import numpy as np
 import pandas as pd
 
-
-def setup_logger(base_dir: str | Path):
-    """Initializes a file-based logger with a timestamped log file."""
-    log_directory = Path(base_dir)
-    log_directory.mkdir(parents=True, exist_ok=True)
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_filename = f"ce_{timestamp}.log"
-    log_filepath = log_directory / log_filename
-
-    logger = logging.getLogger("ce_pipeline")
-    logger.setLevel(logging.INFO)  # Set base level to INFO
-
-    if logger.hasHandlers():
-        logger.handlers.clear()
-
-    file_handler = logging.FileHandler(log_filepath)
-    file_handler.setLevel(logging.INFO)
-
-    formatter = logging.Formatter(
-        "%(asctime)s - %(levelname)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
-
-    return logger
-
-
-def safe_str_to_float(val: Any, logger: logging.Logger, context_msg: str) -> float:
-    """
-    Safely converts a value (usually string) to float.
-    Returns np.nan on error and logs a warning.
-    """
-    if pd.isna(val) or val == "":
-        return np.nan
-    try:
-        return float(val)
-    except (ValueError, TypeError):
-        logger.warning(
-            f"Conversion Error: Could not convert '{val}' to float for {context_msg}."
-        )
-        return np.nan
+from ce_utils import check_required_columns, format_numeric_value
 
 
 def recreate_base_dir(base_dir: str):
@@ -60,82 +19,6 @@ def recreate_base_dir(base_dir: str):
     if base_dir_path.exists():
         shutil.rmtree(base_dir_path)
     base_dir_path.mkdir(parents=True, exist_ok=True)
-
-
-# ce_helpers.py
-def check_required_columns(
-    df: pd.DataFrame,
-    *,
-    required_context_cols: Tuple[str, ...] = (
-        "l3_name",
-        "attribute_name",
-        "attribute_value",
-    ),
-    overwrite_init: bool = False,  # ✅ NEW
-    logger: logging.Logger = logging.getLogger(__name__),
-) -> pd.DataFrame:
-    """
-    Ensure the frame has the core CE schema.
-
-    Parameters
-    ----------
-    overwrite_init : bool, default False
-        • False  → **idempotent**: create any missing init columns but keep
-          whatever data is already there.
-        • True   → **fresh start**: *drop* the init columns if they exist and
-          recreate them, filled with ``pd.NA``.
-    """
-    id_cols = ("int_pid", "ext_pid")
-    init_cols = [
-        "data_type",
-        "key_value",
-        "child_attribute",
-        "polarity1",
-        "value1",
-        "unit1",
-        "polarity2",
-        "value2",
-        "unit2",
-        "display_value",
-        "mod_reason",
-    ]
-
-    # --- 0. Sanity checks --------------------------------------------------
-    if df.empty:
-        final_order = [*id_cols, *required_context_cols, *init_cols]
-        return pd.DataFrame(columns=final_order)
-
-    if not any(col in df.columns for col in id_cols):
-        raise KeyError("Either 'int_pid' or 'ext_pid' column is required")
-
-    missing_ctx = [c for c in required_context_cols if c not in df.columns]
-    if missing_ctx:
-        raise KeyError(f"Missing required context columns: {missing_ctx}")
-
-    # --- 1. Copy & (optionally) wipe the init columns ----------------------
-    df2 = df.copy()
-    if overwrite_init:
-        df2.drop(
-            columns=init_cols,
-            inplace=True,
-            errors="ignore",
-        )
-
-    # --- 2. Add any still-missing init columns -----------------------------
-    for col in init_cols:
-        if col not in df2.columns:
-            df2[col] = pd.NA
-
-    # --- 3. Stable column order -------------------------------------------
-    final_order = (
-        [c for c in id_cols if c in df2.columns]
-        + list(required_context_cols)
-        + init_cols
-    )
-    # *dict.fromkeys* removes accidental duplicates while preserving order
-    final_order = list(dict.fromkeys(final_order))
-
-    return df2.loc[:, final_order]
 
 
 def lowercase_columns_and_values(
@@ -208,6 +91,7 @@ def get_compiled_regex(pattern_name: str) -> re.Pattern:
 
     patterns = {
         "numeric_with_optional_unit": rf"^{num_opt_unit}$",
+        
         "thread_metric": rf"""(?ix) ^\s*m {num_opt_unit} \s*
                               [x×] \s*
                               ([0-9]+(?:\.[0-9]+)?(?:/[0-9]+)?)\s*
@@ -271,17 +155,40 @@ def save_dfs(
     base_dir: str = ".",
     logger: logging.Logger = logging.getLogger(__name__),
 ) -> None:
-    """Saves passed and modified DataFrames to their respective directories."""
+    """
+    Saves DataFrames, applying final numeric formatting and prefixing in a
+    single, atomic operation just before saving to prevent data type issues.
+    """
     os.makedirs(os.path.join(base_dir, "passed"), exist_ok=True)
     os.makedirs(os.path.join(base_dir, "mod"), exist_ok=True)
 
-    if passed_df is not None and not passed_df.empty:
-        passed_path = os.path.join(base_dir, "passed", f"{func_name}_passed.csv")
-        passed_df = process_rp(passed_df, logger=logger)
-        passed_df.drop(columns=["mod_reason"], errors="ignore", inplace=True)
-        passed_df.to_csv(passed_path, index=False)
+    def _format_and_save(df: pd.DataFrame, path: str):
+        if df is None or df.empty:
+            return
 
-    if mod_df is not None and not mod_df.empty:
-        mod_path = os.path.join(base_dir, "mod", f"{func_name}_mod.csv")
-        mod_df = process_rp(mod_df, logger=logger)
-        mod_df.to_csv(mod_path, index=False)
+        df_copy = df.copy()
+        cols_to_prefix = ["attribute_value", "value1", "display_value", "value2"]
+
+        for col in cols_to_prefix:
+            if col in df_copy.columns:
+                if col in ["value1", "value2"]:
+                    df_copy[col] = df_copy[col].apply(
+                        lambda x: (
+                            f"rp_{format_numeric_value(x)}" if pd.notna(x) else pd.NA
+                        )
+                    )
+                else:
+                    df_copy[col] = df_copy[col].apply(
+                        lambda x: f"rp_{x}" if pd.notna(x) else pd.NA
+                    )
+
+        if "passed" in path and "mod_reason" in df_copy.columns:
+            df_copy.drop(columns=["mod_reason"], inplace=True)
+
+        df_copy.to_csv(path, index=False)
+
+    passed_path = os.path.join(base_dir, "passed", f"{func_name}_passed.csv")
+    _format_and_save(passed_df, passed_path)
+
+    mod_path = os.path.join(base_dir, "mod", f"{func_name}_mod.csv")
+    _format_and_save(mod_df, mod_path)

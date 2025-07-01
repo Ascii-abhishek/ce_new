@@ -1,15 +1,21 @@
 import logging
 import re
-import shutil
-from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
 
 from ce_helpers import *
+from ce_utils import (
+    check_required_columns,
+    format_numeric_value,
+    safe_str_to_float,
+    setup_logger,
+)
+from generate_display import build_display_values
 from utils.db_utils import df_from_query
 from utils.pandas_read_data_utils import ensure_pd_df
+import ce_constants as constants
 
 
 def _calculate_mixed_fraction_value(
@@ -60,31 +66,52 @@ def _convert_decimal_to_float(
 
 def _process_row_for_numerical_unit(
     row: pd.Series, regex_cols_map: Dict[str, str], logger: logging.Logger
-) -> Tuple[float, str]:
-    """Processes a row with regex captures to compute a numeric value."""
+) -> Tuple[float | int | np.floating, str]:
+    """
+    Convert the regex captures in *row* to a single numeric value
+    (value1 / value2, etc.), then format it so that:
+        • it is rounded to 4 dp,
+        • trailing zeros are stripped,
+        • whole numbers are returned as plain ints.
+
+    Returns
+    -------
+    value : int | float | np.nan
+        The formatted numeric value.
+    err_msg : str
+        Empty string on success; otherwise a short description of what went wrong.
+    """
     context = f"attribute_value '{row.get('attribute_value', '')}'"
-    # Mixed fraction
+
+    # ── Mixed fraction ──────────────────────────────────────────────────
     if pd.notna(row.get(regex_cols_map["mixed_whole"])):
-        return _calculate_mixed_fraction_value(
+        raw_val, err = _calculate_mixed_fraction_value(
             row[regex_cols_map["mixed_whole"]],
             row[regex_cols_map["mixed_num"]],
             row[regex_cols_map["mixed_den"]],
             logger,
             context,
         )
-    # Simple fraction
+        return format_numeric_value(raw_val), err
+
+    # ── Simple fraction ─────────────────────────────────────────────────
     if pd.notna(row.get(regex_cols_map["simple_num"])):
-        return _calculate_simple_fraction_value(
+        raw_val, err = _calculate_simple_fraction_value(
             row[regex_cols_map["simple_num"]],
             row[regex_cols_map["simple_den"]],
             logger,
             context,
         )
-    # Decimal/integer
+        return format_numeric_value(raw_val), err
+
+    # ── Decimal / integer ──────────────────────────────────────────────
     if pd.notna(row.get(regex_cols_map["decimal"])):
-        return _convert_decimal_to_float(
+        raw_val, err = _convert_decimal_to_float(
             row[regex_cols_map["decimal"]], logger, context
         )
+        return format_numeric_value(raw_val), err
+
+    # ── Nothing matched ────────────────────────────────────────────────
     return np.nan, "No recognizable numeric format"
 
 
@@ -138,55 +165,6 @@ def _cleanup_range(
     passed_df = df_work[~mismatch_mask].copy()
 
     return passed_df.reset_index(drop=True), mod_df.reset_index(drop=True)
-
-
-def fill_display_value(
-    df: pd.DataFrame,
-    *,
-    logger: logging.Logger = logging.getLogger(__name__),
-) -> pd.DataFrame:
-    """
-    Populate/over-write the **display_value** column according to the
-    row’s ``data_type`` and polarity flags.  Operates *in-place* and
-    returns the frame for convenience.
-    """
-    if df.empty or "data_type" not in df.columns:
-        return df
-
-    def _build(row: pd.Series) -> str:
-        dt = str(row.get("data_type", "")).lower()
-        v1 = row.get("value1", "")
-        v2 = row.get("value2", "")
-        u1 = (str(row.get("unit1", "")) or "").capitalize()
-        u2 = (str(row.get("unit2", "")) or "").capitalize()
-        p1 = "-" if str(row.get("polarity1", "")).strip() == "-" else ""
-        p2 = "-" if str(row.get("polarity2", "")).strip() == "-" else ""
-
-        if dt == "numerical_with_unit":
-            return f"{p1}{v1} {u1}".strip()
-
-        elif dt == "numerical_without_unit":
-            return f"{p1}{v1}".strip()
-
-        elif dt == "categorical":
-            return str(v1).title()
-
-        elif dt == "categorical2":
-            return ", ".join(seg.strip().title() for seg in str(v1).split(","))
-
-        elif dt == "varchar":
-            return str(v1)
-
-        elif dt == "range1":
-            left = f"{p1}{v1} {u1}".strip()
-            right = f"{p2}{v2} {u2}".strip()
-            return f"{left} to {right}"
-
-        # fall-back → leave whatever is already in attribute_value
-        return str(row.get("attribute_value", ""))
-
-    df["display_value"] = df.apply(_build, axis=1)
-    return df
 
 
 #######################################################################################################
@@ -419,17 +397,10 @@ def clean_thread(
 
     # ------------------------------------------------------------------ 0. guard
     if df.empty:
-        cols = list(df.columns) + [
-            "child_attribute",
-            "key_value",
-            "polarity1",
-            "value1",
-            "unit1",
-            "data_type",
-        ]
+        cols = constants.REQUIRED_COLUMNS.get("base_df")
         return (
             pd.DataFrame(columns=cols),
-            pd.DataFrame(columns=cols + ["mod_reason"]),
+            pd.DataFrame(columns=cols),
             pd.DataFrame(columns=cols),
         )
 
@@ -558,17 +529,22 @@ def clean_thread(
         _df.drop(columns=["_orig_attr"], errors="ignore", inplace=True)
 
     # ------------------------------------------------------------------ 7. column order / fill-ins
-    req_ctx = ("l3_name", "attribute_name", "child_attribute", value_column)
-    passed = check_required_columns(
-        passed, required_context_cols=req_ctx, logger=logger
-    )
-    mod = check_required_columns(mod, required_context_cols=req_ctx, logger=logger)
+    passed = check_required_columns(passed, logger=logger)
+    mod = check_required_columns(mod, logger=logger)
     remain_df = check_required_columns(remain_df, logger=logger)  # default ctx
 
     # ------------------------------------------------------------------ 8. set display_value for thread specs
+
     for _df in (passed, mod):
         if not _df.empty:
             _df["display_value"] = _df["attribute_value"]
+
+    passed["polarity1"] = np.where(
+        (passed["attribute_value"].str.strip().str.startswith("#"))
+        & (passed["child_attribute"] == "thread dia."),
+        "#",
+        passed["polarity1"],
+    )
 
     return passed, mod, remain_df
 
@@ -900,6 +876,8 @@ def run_cleanup_pipeline(
         f"Initial cleanup complete. Starting sequential cleaners on {len(remain)} rows."
     )
 
+    unit_df = check_required_columns(unit_df, "unit_df")
+
     # --- Pipeline Steps ---
     def log_step(name, passed, mod, remain):
         logger.info(f"Function '{name}':")
@@ -911,7 +889,7 @@ def run_cleanup_pipeline(
     # Step 1: Varchar and Categorical
     logger.info(f"1️⃣: clean_varchar_categorical on {len(remain)} rows...")
     passed, mod, remain = clean_varchar_categorical(df=remain, logger=logger)
-    passed = fill_display_value(passed, logger=logger)
+    passed = build_display_values(passed, unit_df, logger=logger)
     save_dfs("clean_varchar_categorical", passed, mod, base_dir, logger=logger)
     log_step("clean_varchar_categorical", passed, mod, remain)
 
@@ -920,7 +898,7 @@ def run_cleanup_pipeline(
     passed, mod, remain = clean_numerical_unit(
         df=remain, unit_df=unit_df, logger=logger
     )
-    passed = fill_display_value(passed, logger=logger)
+    passed = build_display_values(passed, unit_df, logger=logger)
     save_dfs("clean_numerical_unit", passed, mod, base_dir, logger=logger)
     log_step("clean_numerical_unit", passed, mod, remain)
 
@@ -935,7 +913,7 @@ def run_cleanup_pipeline(
     passed, mod, remain = clean_dimension_values(
         df=remain, unit_df=unit_df, logger=logger
     )
-    passed = fill_display_value(passed, logger=logger)
+    passed = build_display_values(passed, unit_df, logger=logger)
     save_dfs("clean_dimension_values", passed, mod, base_dir, logger=logger)
     log_step("clean_dimension_values", passed, mod, remain)
 
@@ -944,7 +922,7 @@ def run_cleanup_pipeline(
     passed, mod, remain = clean_range_with_to_and_hyphen(
         df=remain, unit_df=unit_df, logger=logger
     )
-    passed = fill_display_value(passed, logger=logger)
+    passed = build_display_values(passed, unit_df, logger=logger)
     save_dfs("clean_range_with_to_and_hyphen", passed, mod, base_dir, logger=logger)
     log_step("clean_range_with_to_and_hyphen", passed, mod, remain)
 
