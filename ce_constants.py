@@ -1,5 +1,5 @@
 REQUIRED_COLUMNS = {
-    "base_df": ["int_pid", "l3_name", "attribute_name", "attribute_value"],
+    "base_df": ["ext_pid", "l3_name", "attribute_name", "attribute_value"],
     "unit_df": ["units", "display", "type", "space", "separator", "range"],
 }
 

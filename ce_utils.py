@@ -6,7 +6,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-import ce_constants as constants
+from .ce_constants import *
 
 
 def check_required_columns(
@@ -16,13 +16,11 @@ def check_required_columns(
     logger: logging.Logger = logging.getLogger(__name__),
 ) -> pd.DataFrame:
     """Ensure the dataframe has the required and initialized columns."""
-    required_cols = constants.REQUIRED_COLUMNS.get(df_name)
+    required_cols = REQUIRED_COLUMNS.get(df_name)
     if not required_cols:
-        raise KeyError(
-            constants.ERROR_MESSAGES["invalid_df_name"].format(df_name=df_name)
-        )
+        raise KeyError(ERROR_MESSAGES["invalid_df_name"].format(df_name=df_name))
 
-    init_cols = constants.INIT_COLUMNS.get(df_name, [])
+    init_cols = INIT_COLUMNS.get(df_name, [])
     final_order = list(required_cols) + init_cols
 
     if df.empty:
@@ -31,9 +29,7 @@ def check_required_columns(
     missing_cols = [col for col in required_cols if col not in df.columns]
     if missing_cols:
         raise KeyError(
-            constants.ERROR_MESSAGES["missing_required_columns"].format(
-                missing_cols=missing_cols
-            )
+            ERROR_MESSAGES["missing_required_columns"].format(missing_cols=missing_cols)
         )
 
     df_copy = df.copy()

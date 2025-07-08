@@ -5,17 +5,17 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 import pandas as pd
 
-from ce_helpers import *
-from ce_utils import (
+from .ce_helpers import *
+from .ce_utils import (
     check_required_columns,
     format_numeric_value,
     safe_str_to_float,
     setup_logger,
 )
-from generate_display import build_display_values
+from .generate_display import build_display_values
 from utils.db_utils import df_from_query
 from utils.pandas_read_data_utils import ensure_pd_df
-import ce_constants as constants
+from .ce_constants import REQUIRED_COLUMNS
 
 
 def _calculate_mixed_fraction_value(
@@ -397,7 +397,7 @@ def clean_thread(
 
     # ------------------------------------------------------------------ 0. guard
     if df.empty:
-        cols = constants.REQUIRED_COLUMNS.get("base_df")
+        cols = REQUIRED_COLUMNS.get("base_df")
         return (
             pd.DataFrame(columns=cols),
             pd.DataFrame(columns=cols),
@@ -856,7 +856,7 @@ def clean_range_with_to_and_hyphen(
 
 
 def run_cleanup_pipeline(
-    raw_df: pd.DataFrame,
+    input_data_to_clean: str,
     output_path: str = ".",
     logger: logging.Logger = None,
 ) -> None:
@@ -865,10 +865,10 @@ def run_cleanup_pipeline(
     """
     recreate_base_dir(base_dir=output_path)
     logger = setup_logger(output_path) if logger is None else logger
-
+    
+    raw_df = ensure_pd_df(input_data_to_clean)
     logger.info(f"▶️ Starting Cleaning Engine Pipeline on {len(raw_df)} rows.")
 
-    # Initial Cleanup
     df_cleaned = ce_start_cleanup(raw_df, logger)
     remain = df_cleaned
     logger.info(

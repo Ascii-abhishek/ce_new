@@ -7,8 +7,8 @@ from typing import List, Tuple
 import numpy as np
 import pandas as pd
 
-from ce_utils import format_numeric_value
-import ce_constants as cnst
+from .ce_utils import format_numeric_value
+from .ce_constants import REQUIRED_COLUMNS
 
 
 def _decimal_to_simple_fraction(
@@ -83,6 +83,8 @@ def _compose_value_with_unit(
         pol = "-"
     elif polarity == "+":
         pol = "+"
+    else:
+        pol = ""
     numeric_part = _compose_numeric(value, style=num_style)
 
     if not numeric_part and not unit_disp:
@@ -214,7 +216,7 @@ def build_display_values(
         work["display_value"] = work.apply(_build_row, axis=1)
 
     # Remove the merged helper columns so the output column set == input
-    drop_cols = cnst.REQUIRED_COLUMNS.get("unit_df")
+    drop_cols = REQUIRED_COLUMNS.get("unit_df")
     logger.debug(f"drop columns: {drop_cols}")
     work.drop(columns=drop_cols, inplace=True, errors="ignore")
     work.reset_index(drop=True, inplace=True)

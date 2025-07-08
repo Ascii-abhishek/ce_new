@@ -10,7 +10,7 @@ from typing import Any, List, Tuple
 import numpy as np
 import pandas as pd
 
-from ce_utils import check_required_columns, format_numeric_value
+from .ce_utils import check_required_columns, format_numeric_value
 
 
 def recreate_base_dir(base_dir: str):
