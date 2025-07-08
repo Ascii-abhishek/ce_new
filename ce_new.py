@@ -857,15 +857,14 @@ def clean_range_with_to_and_hyphen(
 
 def run_cleanup_pipeline(
     raw_df: pd.DataFrame,
-    unit_df: pd.DataFrame,
-    base_dir: str = ".",
+    output_path: str = ".",
     logger: logging.Logger = None,
 ) -> None:
     """
     Runs the full CE cleanup pipeline and saves intermediate outputs.
     """
-    recreate_base_dir(base_dir=base_dir)
-    logger = setup_logger(base_dir) if logger is None else logger
+    recreate_base_dir(base_dir=output_path)
+    logger = setup_logger(output_path) if logger is None else logger
 
     logger.info(f"▶️ Starting Cleaning Engine Pipeline on {len(raw_df)} rows.")
 
@@ -876,6 +875,7 @@ def run_cleanup_pipeline(
         f"Initial cleanup complete. Starting sequential cleaners on {len(remain)} rows."
     )
 
+    unit_df = df_from_query("select * from hercules_db.ce_unit_mapping")
     unit_df = check_required_columns(unit_df, "unit_df")
 
     # --- Pipeline Steps ---
@@ -890,7 +890,7 @@ def run_cleanup_pipeline(
     logger.info(f"1️⃣: clean_varchar_categorical on {len(remain)} rows...")
     passed, mod, remain = clean_varchar_categorical(df=remain, logger=logger)
     passed = build_display_values(passed, unit_df, logger=logger)
-    save_dfs("clean_varchar_categorical", passed, mod, base_dir, logger=logger)
+    save_dfs("clean_varchar_categorical", passed, mod, output_path, logger=logger)
     log_step("clean_varchar_categorical", passed, mod, remain)
 
     # Step 2: Numerical with/without Unit
@@ -899,13 +899,13 @@ def run_cleanup_pipeline(
         df=remain, unit_df=unit_df, logger=logger
     )
     passed = build_display_values(passed, unit_df, logger=logger)
-    save_dfs("clean_numerical_unit", passed, mod, base_dir, logger=logger)
+    save_dfs("clean_numerical_unit", passed, mod, output_path, logger=logger)
     log_step("clean_numerical_unit", passed, mod, remain)
 
     # Step 3: Thread Spec Filter
     logger.info(f"3️⃣: clean_thread on {len(remain)} rows...")
     passed, mod, remain = clean_thread(df=remain, unit_df=unit_df, logger=logger)
-    save_dfs("clean_thread", passed, mod, base_dir, logger=logger)
+    save_dfs("clean_thread", passed, mod, output_path, logger=logger)
     log_step("clean_thread", passed, mod, remain)
 
     # Step 4: Dimension Values (e.g., 10 x 20)
@@ -914,7 +914,7 @@ def run_cleanup_pipeline(
         df=remain, unit_df=unit_df, logger=logger
     )
     passed = build_display_values(passed, unit_df, logger=logger)
-    save_dfs("clean_dimension_values", passed, mod, base_dir, logger=logger)
+    save_dfs("clean_dimension_values", passed, mod, output_path, logger=logger)
     log_step("clean_dimension_values", passed, mod, remain)
 
     # Step 5: Range Values (e.g., 100 to 200)
@@ -923,7 +923,7 @@ def run_cleanup_pipeline(
         df=remain, unit_df=unit_df, logger=logger
     )
     passed = build_display_values(passed, unit_df, logger=logger)
-    save_dfs("clean_range_with_to_and_hyphen", passed, mod, base_dir, logger=logger)
+    save_dfs("clean_range_with_to_and_hyphen", passed, mod, output_path, logger=logger)
     log_step("clean_range_with_to_and_hyphen", passed, mod, remain)
 
     # Final Step: Save any remaining unprocessable rows
@@ -932,7 +932,7 @@ def run_cleanup_pipeline(
     )
     if not remain.empty:
         remain["mod_reason"] = "Unprocessed by any cleaner"
-        remain_path = os.path.join(base_dir, "mod", "final_remain.csv")
+        remain_path = os.path.join(output_path, "mod", "final_remain.csv")
         remain.to_csv(remain_path, index=False)
         logger.info(f"Saved remaining rows to 'mod/final_remain.csv'.")
 

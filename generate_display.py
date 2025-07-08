@@ -31,6 +31,10 @@ def _decimal_to_simple_fraction(
     except (ValueError, TypeError):
         return str(val)
 
+    # Check if the number is an integer
+    if num.is_integer():
+        return str(int(num))
+
     frac = Fraction(num).limit_denominator(max_denominator)
     return f"{frac.numerator}/{frac.denominator}"
 
@@ -74,7 +78,11 @@ def _compose_value_with_unit(
 ) -> str:
     """Build the *value + unit* segment respecting polarity, spacing & numeric style."""
 
-    pol = "-" if str(polarity).strip() == "-" else ""
+    polarity = str(polarity).strip()
+    if polarity == "-":
+        pol = "-"
+    elif polarity == "+":
+        pol = "+"
     numeric_part = _compose_numeric(value, style=num_style)
 
     if not numeric_part and not unit_disp:
