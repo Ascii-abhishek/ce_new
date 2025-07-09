@@ -43,11 +43,19 @@ def _apply_spacing(left: str, right: str, flag: str | float | None) -> str:
     """Return ``left + space? + right`` where the space is added **only** when
     *flag* (from the reference unit table) is the literal string ``"space"``.
     """
-    if not left and not right:
+    # Explicitly handle NA values before boolean checks
+    is_left_empty = pd.isna(left) or left == ""
+    is_right_empty = pd.isna(right) or right == ""
+
+    if is_left_empty and is_right_empty:
         return ""
 
+    # Ensure left and right are strings before concatenation
+    left_str = "" if is_left_empty else left
+    right_str = "" if is_right_empty else right
+
     space = " " if str(flag).strip().lower() == "space" else ""
-    return f"{left}{space}{right}"
+    return f"{left_str}{space}{right_str}"
 
 
 def _compose_numeric(value: float | int | str | np.nan, *, style: str) -> str:
@@ -173,14 +181,15 @@ def build_display_values(
             )
 
         if dt == "range1":
-            joiner = str(row.get("range", "to")) or "to"
+            range_val = row.get("range")
+            joiner = "to" if pd.isna(range_val) else str(range_val)
             # Special case: dash joiner should omit unit1 on left side
             if joiner == "-":
                 # left: numeric + polarity
                 left_num = _compose_numeric(row.get("value1"), style=num_style)
+                # polarity1 = row.get("polarity1")
                 left_pol = "-" if str(row.get("polarity1")).strip() == "-" else ""
                 left = f"{left_pol}{left_num}" if left_num else left_pol
-                # right: full value + unit2
                 right = _compose_value_with_unit(
                     row.get("value2"),
                     row.get("polarity2"),
@@ -190,7 +199,6 @@ def build_display_values(
                 )
                 return f"{left}{joiner}{right}"
 
-            # default behavior
             left = _compose_value_with_unit(
                 row.get("value1"),
                 row.get("polarity1"),

@@ -134,7 +134,9 @@ def _cleanup_range(
     df_work = data_df.copy()
 
     # Logic to swap values/polarities as before
-    mask_swap_polarity = (df_work["polarity1"] == "+") & (df_work["polarity2"] == "-")
+    mask_swap_polarity = (df_work["polarity1"].astype(str).fillna("") == "+") & (
+        df_work["polarity2"].astype(str).fillna("") == "-"
+    )
     if mask_swap_polarity.any():
         rows = df_work.loc[mask_swap_polarity].index
         df_work.loc[rows, ["polarity1", "polarity2"]] = df_work.loc[
@@ -291,7 +293,7 @@ def clean_numerical_unit(
     passed_intermediate = combined.loc[~no_match_mask].copy()
 
     logger.info(
-        f"{len(passed_intermediate)} rows matched regex; {len(remaining_df)} did not."
+        f"{len(passed_intermediate)} rows matched clean_numeric_unit regex; {len(remaining_df)} did not."
     )
 
     if not passed_intermediate.empty:
@@ -735,7 +737,7 @@ def clean_range_with_to_and_hyphen(
     candidate_df = work[work["_is_range"]].copy()
     remaining_df = work[~work["_is_range"]].drop(columns=["_is_range"]).copy()
 
-    logger.info(f"{len(candidate_df)} rows matched regex; {len(remaining_df)} did not.")
+    logger.info(f"{len(candidate_df)} rows matched clean_range regex; {len(remaining_df)} did not.")
 
     # ------------------------------------------------------------------
     # 2. Return early if nothing matched
@@ -858,14 +860,14 @@ def clean_range_with_to_and_hyphen(
 def run_cleanup_pipeline(
     input_data_to_clean: str,
     output_path: str = ".",
-    logger: logging.Logger = None,
+    logger: logging.Logger = logging.getLogger(__name__),
 ) -> None:
     """
     Runs the full CE cleanup pipeline and saves intermediate outputs.
     """
     recreate_base_dir(base_dir=output_path)
     logger = setup_logger(output_path) if logger is None else logger
-    
+
     raw_df = ensure_pd_df(input_data_to_clean)
     logger.info(f"▶️ Starting Cleaning Engine Pipeline on {len(raw_df)} rows.")
 
@@ -922,6 +924,7 @@ def run_cleanup_pipeline(
     passed, mod, remain = clean_range_with_to_and_hyphen(
         df=remain, unit_df=unit_df, logger=logger
     )
+
     passed = build_display_values(passed, unit_df, logger=logger)
     save_dfs("clean_range_with_to_and_hyphen", passed, mod, output_path, logger=logger)
     log_step("clean_range_with_to_and_hyphen", passed, mod, remain)
@@ -937,11 +940,3 @@ def run_cleanup_pipeline(
         logger.info(f"Saved remaining rows to 'mod/final_remain.csv'.")
 
     logger.info("✅ Cleanup pipeline completed successfully.")
-
-
-if __name__ == "__main__":
-    df = ensure_pd_df(
-        "/home/abhishek/projects/cleaning/data/sealmaster_part2_for_cleaning.xlsx"
-    )
-    unit_df = df_from_query("select units, display from hercules_db.ce_unit_mapping")
-    run_cleanup_pipeline(df, unit_df)
