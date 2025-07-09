@@ -366,9 +366,9 @@ def clean_numerical_unit(
         final_passed_df, final_mod_df = pd.DataFrame(), pd.DataFrame()
 
     # Reorder and drop helper columns
-    passed_df = check_required_columns(final_passed_df, logger=logger)
-    mod_df = check_required_columns(final_mod_df, logger=logger)
-    remaining_df = check_required_columns(remaining_df, logger=logger)
+    passed_df = check_required_columns(df=final_passed_df, logger=logger)
+    mod_df = check_required_columns(df=final_mod_df, logger=logger)
+    remaining_df = check_required_columns(df=remaining_df, logger=logger)
 
     return passed_df, mod_df, remaining_df
 
@@ -529,9 +529,9 @@ def clean_thread(
         _df.drop(columns=["_orig_attr"], errors="ignore", inplace=True)
 
     # ------------------------------------------------------------------ 7. column order / fill-ins
-    passed = check_required_columns(passed, logger=logger)
-    mod = check_required_columns(mod, logger=logger)
-    remain_df = check_required_columns(remain_df, logger=logger)  # default ctx
+    passed = check_required_columns(df=passed, logger=logger)
+    mod = check_required_columns(df=mod, logger=logger)
+    remain_df = check_required_columns(df=remain_df, logger=logger)  # default ctx
 
     # ------------------------------------------------------------------ 8. set display_value for thread specs
 
@@ -645,9 +645,9 @@ def clean_dimension_values(
         _df.drop(columns=["_orig_attr"], errors="ignore", inplace=True)
 
     # 4. Column sanity -----------------------------------------------
-    pass_df = check_required_columns(pass_df, logger)
-    mod_df = check_required_columns(mod_df, logger)
-    remain_df = check_required_columns(remain_df, logger)
+    pass_df = check_required_columns(df=pass_df, logger=logger)
+    mod_df = check_required_columns(df=mod_df, logger=logger)
+    remain_df = check_required_columns(df=remain_df, logger=logger)
 
     return pass_df, mod_df, remain_df
 
@@ -844,9 +844,9 @@ def clean_range_with_to_and_hyphen(
     mod_df = mod_df.drop(columns=helper_cols, errors="ignore")
     remaining_df = remaining_df.drop(columns=helper_cols, errors="ignore")
 
-    range_pass = check_required_columns(range_pass, logger=logger)
-    mod_df = check_required_columns(mod_df, logger=logger)
-    remaining_df = check_required_columns(remaining_df, logger=logger)
+    range_pass = check_required_columns(df=range_pass, logger=logger)
+    mod_df = check_required_columns(df=mod_df, logger=logger)
+    remaining_df = check_required_columns(df=remaining_df, logger=logger)
 
     return range_pass, mod_df, remaining_df
 
@@ -876,7 +876,7 @@ def run_cleanup_pipeline(
     )
 
     unit_df = df_from_query("select * from hercules_db.ce_unit_mapping")
-    unit_df = check_required_columns(unit_df, "unit_df")
+    unit_df = check_required_columns(df=unit_df, df_name="unit_df", logger=logger)
 
     # --- Pipeline Steps ---
     def log_step(name, passed, mod, remain):
