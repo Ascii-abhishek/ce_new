@@ -23,3 +23,8 @@ ERROR_MESSAGES = {
     "invalid_df_name": "'{df_name}' is not a valid dataframe identifier.",
     "missing_required_columns": "Missing required columns: {missing_cols}",
 }
+
+
+MAX_DENOMINATOR = 10
+DEFAULT_SPACE_FLAG = "space"
+DEFAULT_NUM_STYLE = "decimal"

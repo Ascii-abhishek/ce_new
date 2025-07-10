@@ -1,12 +1,64 @@
+import json
 import logging
+import time
 from datetime import datetime
+from functools import wraps
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Tuple
 
 import numpy as np
 import pandas as pd
 
-from .ce_constants import *
+from .constants import *
+
+
+class ValidationError(Exception):
+    """Raised when validation of inputs fails."""
+
+    pass
+
+
+StepResult = Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]
+
+
+def log_step(fn: Callable[[pd.DataFrame], StepResult]) -> Callable[..., StepResult]:
+    """
+    Decorator to log entry, exit, row counts, and execution time of each cleaning step.
+    Uses a passed-in logger if provided via the 'logger' keyword argument to the wrapped function, otherwise falls back to the module-level logger.
+    """
+
+    @wraps(fn)
+    def wrapper(df: pd.DataFrame, *args, **kwargs) -> StepResult:
+        # Extract logger from kwargs or use default
+        log = kwargs.get("logger", logging.getLogger(__name__))
+        name = fn.__name__
+        in_count = len(df)
+        start = time.time()
+        # Call the actual cleaning function; remove logger from kwargs if present
+        func_kwargs = {k: v for k, v in kwargs.items() if k != "logger"}
+        passed, mod, remain = fn(df, *args, **func_kwargs)
+        elapsed = time.time() - start
+        log.info(
+            json.dumps(
+                {
+                    "step": name,
+                    "in": in_count,
+                    "passed": len(passed),
+                    "mod": len(mod),
+                    "remain": len(remain),
+                    "time_s": round(elapsed, 3),
+                }
+            )
+        )
+        return passed, mod, remain
+
+    return wrapper
+
+
+def ensure_columns(df: pd.DataFrame, required: list[str]) -> None:
+    missing = set(required) - set(df.columns)
+    if missing:
+        raise ValidationError(f"Missing columns: {missing}")
 
 
 def check_required_columns(

@@ -13,6 +13,12 @@ import pandas as pd
 from .ce_utils import check_required_columns, format_numeric_value
 
 
+def build_sep_pattern(separators: List[str]) -> str:
+    """Builds a regex pattern for a list of separators."""
+    escaped = sorted([re.escape(s.strip()) for s in separators], key=len, reverse=True)
+    return rf"\s*(?:{'|'.join(escaped)})\s*"
+
+
 def recreate_base_dir(base_dir: str):
     """Deletes and recreates the base directory."""
     base_dir_path = Path(base_dir)
@@ -91,7 +97,6 @@ def get_compiled_regex(pattern_name: str) -> re.Pattern:
 
     patterns = {
         "numeric_with_optional_unit": rf"^{num_opt_unit}$",
-        
         "thread_metric": rf"""(?ix) ^\s*m {num_opt_unit} \s*
                               [x×] \s*
                               ([0-9]+(?:\.[0-9]+)?(?:/[0-9]+)?)\s*
